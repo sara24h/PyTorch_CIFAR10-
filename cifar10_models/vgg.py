@@ -13,7 +13,7 @@ __all__ = [
 
 
 class VGG(nn.Module):
-    def __init__(self, features, num_classes=10, init_weights=True):
+    def __init__(self, features, num_classes=2, init_weights=True):
         super(VGG, self).__init__()
         self.features = features
         # CIFAR 10 (7, 7) to (1, 1)
@@ -124,6 +124,7 @@ def _vgg(arch, cfg, batch_norm, pretrained, progress, device, **kwargs):
         kwargs["init_weights"] = False
     model = VGG(make_layers(cfgs[cfg], batch_norm=batch_norm), **kwargs)
     if pretrained:
+        model.classifier[6] = nn.Linear(4096, 2) 
         script_dir = os.path.dirname(__file__)
         state_dict = torch.load(
             script_dir + "/state_dicts/" + arch + ".pt", map_location=device
@@ -170,3 +171,8 @@ def vgg19_bn(pretrained=False, progress=True, device="cpu", **kwargs):
         progress (bool): If True, displays a progress bar of the download to stderr
     """
     return _vgg("vgg19_bn", "E", True, pretrained, progress, device, **kwargs)
+
+
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = vgg19_bn(pretrained=True, device=device)
