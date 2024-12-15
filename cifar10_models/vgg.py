@@ -1,3 +1,7 @@
+
+
+
+################################################################
 import os
 
 import torch
@@ -12,17 +16,16 @@ __all__ = [
 ]
 
 
+import torch
+
 class VGG(nn.Module):
-    def __init__(self, features, num_classes=2, init_weights=True):
+    def __init__(self, features, num_classes=10, init_weights=True):
         super(VGG, self).__init__()
         self.features = features
-        # CIFAR 10 (7, 7) to (1, 1)
-        # self.avgpool = nn.AdaptiveAvgPool2d((7, 7))
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
         self.classifier = nn.Sequential(
             nn.Linear(512 * 1 * 1, 4096),
-            # nn.Linear(512 * 7 * 7, 4096),
             nn.ReLU(True),
             nn.Dropout(),
             nn.Linear(4096, 4096),
@@ -37,8 +40,15 @@ class VGG(nn.Module):
         x = self.features(x)
         x = self.avgpool(x)
         x = x.view(x.size(0), -1)
+        
+        # ذخیره وزن‌ها قبل از لایه classifier
+        features_before_classifier = x.clone()  # استخراج ویژگی‌ها قبل از classifier
+        torch.save(features_before_classifier, '/content/drive/MyDrive/vgg_25_Azar/features_before_classifier.pth')
+
+
         x = self.classifier(x)
         return x
+
 
     def _initialize_weights(self):
         for m in self.modules():
@@ -124,7 +134,6 @@ def _vgg(arch, cfg, batch_norm, pretrained, progress, device, **kwargs):
         kwargs["init_weights"] = False
     model = VGG(make_layers(cfgs[cfg], batch_norm=batch_norm), **kwargs)
     if pretrained:
-        model.classifier[6] = nn.Linear(4096, 2) 
         script_dir = os.path.dirname(__file__)
         state_dict = torch.load(
             script_dir + "/state_dicts/" + arch + ".pt", map_location=device
@@ -171,8 +180,3 @@ def vgg19_bn(pretrained=False, progress=True, device="cpu", **kwargs):
         progress (bool): If True, displays a progress bar of the download to stderr
     """
     return _vgg("vgg19_bn", "E", True, pretrained, progress, device, **kwargs)
-
-
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = vgg19_bn(pretrained=True, device=device)
