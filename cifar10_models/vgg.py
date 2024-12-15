@@ -41,8 +41,8 @@ class VGG(nn.Module):
         x = self.avgpool(x)
         x = x.view(x.size(0), -1)
         
-        # ذخیره وزن‌ها قبل از لایه classifier
-        features_before_classifier = x.clone()  # استخراج ویژگی‌ها قبل از classifier
+       
+        features_before_classifier = x.clone()  
         torch.save(features_before_classifier, '/content/drive/MyDrive/vgg_25_Azar/features_before_classifier.pth')
 
 
