@@ -1,178 +1,90 @@
-import os
-
+import pytorch_lightning as pl
 import torch
-import torch.nn as nn
+from torchmetrics import Accuracy
 
-__all__ = [
-    "VGG",
-    "vgg11_bn",
-    "vgg13_bn",
-    "vgg16_bn",
-    "vgg19_bn",
-]
+from cifar10_models.densenet import densenet121, densenet161, densenet169
+from cifar10_models.googlenet import googlenet
+from cifar10_models.inception import inception_v3
+from cifar10_models.mobilenetv2 import mobilenet_v2
+from cifar10_models.resnet import resnet18, resnet34, resnet50
+from cifar10_models.vgg import vgg11_bn, vgg13_bn, vgg16_bn, vgg19_bn
+from schduler import WarmupCosineLR
 
-
-class VGG(nn.Module):
-    def __init__(self, features, num_classes=2, init_weights=True):
-        super(VGG, self).__init__()
-        self.features = features
-        # CIFAR 10 (7, 7) to (1, 1)
-        # self.avgpool = nn.AdaptiveAvgPool2d((7, 7))
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-
-        self.classifier = nn.Sequential(
-            nn.Linear(512 * 1 * 1, 4096),
-            # nn.Linear(512 * 7 * 7, 4096),
-            nn.ReLU(True),
-            nn.Dropout(),
-            nn.Linear(4096, 4096),
-            nn.ReLU(True),
-            nn.Dropout(),
-            nn.Linear(4096, num_classes),
-        )
-        if init_weights:
-            self._initialize_weights()
-
-    def forward(self, x):
-        x = self.features(x)
-        x = self.avgpool(x)
-        x = x.view(x.size(0), -1)
-        x = self.classifier(x)
-        return x
-
-    def _initialize_weights(self):
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.BatchNorm2d):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.Linear):
-                nn.init.normal_(m.weight, 0, 0.01)
-                nn.init.constant_(m.bias, 0)
-
-
-def make_layers(cfg, batch_norm=False):
-    layers = []
-    in_channels = 3
-    for v in cfg:
-        if v == "M":
-            layers += [nn.MaxPool2d(kernel_size=2, stride=2)]
-        else:
-            conv2d = nn.Conv2d(in_channels, v, kernel_size=3, padding=1)
-            if batch_norm:
-                layers += [conv2d, nn.BatchNorm2d(v), nn.ReLU(inplace=True)]
-            else:
-                layers += [conv2d, nn.ReLU(inplace=True)]
-            in_channels = v
-    return nn.Sequential(*layers)
-
-
-cfgs = {
-    "A": [64, "M", 128, "M", 256, 256, "M", 512, 512, "M", 512, 512, "M"],
-    "B": [64, 64, "M", 128, 128, "M", 256, 256, "M", 512, 512, "M", 512, 512, "M"],
-    "D": [
-        64,
-        64,
-        "M",
-        128,
-        128,
-        "M",
-        256,
-        256,
-        256,
-        "M",
-        512,
-        512,
-        512,
-        "M",
-        512,
-        512,
-        512,
-        "M",
-    ],
-    "E": [
-        64,
-        64,
-        "M",
-        128,
-        128,
-        "M",
-        256,
-        256,
-        256,
-        256,
-        "M",
-        512,
-        512,
-        512,
-        512,
-        "M",
-        512,
-        512,
-        512,
-        512,
-        "M",
-    ],
+all_classifiers = {
+    "vgg11_bn": vgg11_bn(),
+    "vgg13_bn": vgg13_bn(),
+    "vgg16_bn": vgg16_bn(),
+    "vgg19_bn": vgg19_bn(),
+    "resnet18": resnet18(),
+    "resnet34": resnet34(),
+    "resnet50": resnet50(),
+    "densenet121": densenet121(),
+    "densenet161": densenet161(),
+    "densenet169": densenet169(),
+    "mobilenet_v2": mobilenet_v2(),
+    "googlenet": googlenet(),
+    "inception_v3": inception_v3(),
 }
 
+class CIFAR10Module(pl.LightningModule):
+    def __init__(self, hparams, data_module):
+        super().__init__()
+        self.save_hyperparameters(hparams)
+        self.data_module = data_module
 
-def _vgg(arch, cfg, batch_norm, pretrained, progress, device, **kwargs):
-    if pretrained:
-        kwargs["init_weights"] = False
-    model = VGG(make_layers(cfgs[cfg], batch_norm=batch_norm), **kwargs)
-    if pretrained:
-        model.classifier[6] = nn.Linear(4096, 2) 
-        script_dir = os.path.dirname(__file__)
-        state_dict = torch.load(
-           "/content/PyTorch_CIFAR10-" + "/state_dicts/" + arch + ".pt", map_location=device
+        self.criterion = torch.nn.CrossEntropyLoss()
+        self.train_accuracy = Accuracy(task="multiclass", num_classes=10)
+        self.val_accuracy = Accuracy(task="multiclass", num_classes=10)
+        self.test_accuracy = Accuracy(task="multiclass", num_classes=10)
+
+        self.model = all_classifiers[self.hparams.classifier]
+
+    def forward(self, batch):
+        images, labels = batch
+        predictions = self.model(images)
+        loss = self.criterion(predictions, labels)
+        accuracy = self.train_accuracy(predictions, labels)
+        return loss, accuracy * 100
+
+    def training_step(self, batch, batch_nb):
+        loss, accuracy = self.forward(batch)
+        self.log("loss/train", loss)
+        self.log("acc/train", accuracy)
+        return loss
+
+    def validation_step(self, batch, batch_nb):
+        loss, accuracy = self.forward(batch)
+        self.log("loss/val", loss)
+        self.log("acc/val", accuracy)
+
+    def test_step(self, batch, batch_nb):
+        loss, accuracy = self.forward(batch)
+        self.log("acc/test", accuracy)
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.SGD(
+            self.model.parameters(),
+            lr=self.hparams.learning_rate,
+            weight_decay=self.hparams.weight_decay,
+            momentum=0.9,
+            nesterov=True,
         )
-        model.load_state_dict(state_dict)
-    return model
+        total_steps = self.hparams.max_epochs * len(self.data_module.train_dataloader())
+        scheduler = {
+            "scheduler": WarmupCosineLR(
+                optimizer, warmup_epochs=total_steps * 0.3, max_epochs=total_steps
+            ),
+            "interval": "step",
+            "name": "learning_rate",
+        }
+        return [optimizer], [scheduler]
 
+    # اضافه کردن متد train_dataloader
+    def train_dataloader(self):
+        return self.data_module.train_dataloader()
 
-def vgg11_bn(pretrained=False, progress=True, device="cpu", **kwargs):
-    """VGG 11-layer model (configuration "A") with batch normalization
+    def test_dataloader(self):
+        return self.val_dataloader()
 
-    Args:
-        pretrained (bool): If True, returns a model pre-trained on ImageNet
-        progress (bool): If True, displays a progress bar of the download to stderr
-    """
-    return _vgg("vgg11_bn", "A", True, pretrained, progress, device, **kwargs)
-
-
-def vgg13_bn(pretrained=False, progress=True, device="cpu", **kwargs):
-    """VGG 13-layer model (configuration "B") with batch normalization
-
-    Args:
-        pretrained (bool): If True, returns a model pre-trained on ImageNet
-        progress (bool): If True, displays a progress bar of the download to stderr
-    """
-    return _vgg("vgg13_bn", "B", True, pretrained, progress, device, **kwargs)
-
-
-def vgg16_bn(pretrained=False, progress=True, device="cpu", **kwargs):
-    """VGG 16-layer model (configuration "D") with batch normalization
-
-    Args:
-        pretrained (bool): If True, returns a model pre-trained on ImageNet
-        progress (bool): If True, displays a progress bar of the download to stderr
-    """
-    return _vgg("vgg16_bn", "D", True, pretrained, progress, device, **kwargs)
-
-
-def vgg19_bn(pretrained=False, progress=True, device="cpu", **kwargs):
-    """VGG 19-layer model (configuration 'E') with batch normalization
-
-    Args:
-        pretrained (bool): If True, returns a model pre-trained on ImageNet
-        progress (bool): If True, displays a progress bar of the download to stderr
-    """
-    return _vgg("vgg19_bn", "E", True, pretrained, progress, device, **kwargs)
-
-
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = vgg19_bn(pretrained=True, device=device)
+    def val_dataloader(self):
+        return self.data_module.train_dataloader()
